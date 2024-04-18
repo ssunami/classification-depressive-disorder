@@ -11,12 +11,12 @@ and attribute selection methods, thus there are 6 training sets prepared in tota
 
 The combination of methods are as follows:
 
-Training Set 1: SMOTE and CFS
-Training Set 2: SMOTE and info gain
-Training Set 3: SMOTE and RF importance
-Training Set 4: Random over/under sampling and CFS
-Training Set 5: Random over/under sampling and info gain
-Training Set 6: Random over/under sampling and RF importance
+1. SMOTE and CFS
+2. SMOTE and info gain
+3. SMOTE and RF importance
+4. Random over/under sampling and CFS
+5. Random over/under sampling and info gain
+6. Random over/under sampling and RF importance
 
 ## Classification Models
 
