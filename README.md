@@ -1,4 +1,7 @@
 # Classification of Patient with Depressive Disorder
+
+Depressive disorders are one of the major mental health problems suffered by millions of people worldwide. This disorder not only significantly reduces an individual's quality of life, but also causes significant socioeconomic burden. While early diagnosis and appropriate therapeutic intervention are considered key to recovery, this study aims to develop a machine learning-based classification model for depressive disorders to improve the accuracy and efficiency of diagnosis.
+
 ## Project Overview
 
 ## Data
