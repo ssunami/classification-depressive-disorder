@@ -1,0 +1,794 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+#Coded by Shunya Sunami (U28035976), Abhishek Singhal (U01433883)
+
+library(tidyverse)   
+library(modeest)
+library(caret)
+library(rJava)
+library(FSelector)
+library(Boruta)
+library(dplyr)
+library(mRMRe)
+library(performanceEstimation)
+library(smotefamily)
+library(ROSE)
+library(UBL)
+library(ElemStatLearn)
+library(FSelector)
+library(e1071)
+library(pROC)
+library(mltools)
+library(MLmetrics)
+library(MASS)
+library(randomForest)
+```
+```{r}
+file <- read.csv("project_dataset_5K.csv")
+# Find columns where all rows are empty
+empty_columns <- colnames(file)[colSums(is.na(file)) > nrow(file)*0.3]
+# Remove columns with more than 30% NAs
+file_without_empty_columns <- file[, !(colnames(file) %in% empty_columns)]
+
+#Delete the unnecessary columns
+file_without_unnecessaru_columns <- subset(file_without_empty_columns, select = -c(IDATE, IDAY, IYEAR, SEQNO, X_PSU, FMONTH, IMONTH,WEIGHT2,HEIGHT3, ALCDAY5, X_STSTR, HTIN4))
+
+column_continuous <- c("PHYSHLTH", "SLEPTIM1", "CPDEMO1B", "CHILDREN", "X_STRWT", "X_RAWRAKE", "X_WT2RAKE", "X_LLCPWT2", "X_LLCPWT","X_AGE80","HTM4", "WTKG3", "X_BMI5", "DROCDY3_", "X_DRNKWK1")
+continuous_data <- file_without_unnecessaru_columns[column_continuous]
+categorical_data <- file_without_unnecessaru_columns[, !names(file_without_unnecessaru_columns) %in% column_continuous]
+```
+
+```{r}
+#Handling the Categorical variables
+replace_values <- function(column) {
+  # Remove NAs and get unique values
+  unique_values <- unique(na.omit(column))
+  # Check if all unique values are among 1, 2, 3, 4, 5, 7, 9
+  if (all(unique_values %in% c(1, 2, 3, 4, 5, 6, 7, 8, 9))) {
+    # Replace NA and 7 with 9
+    column[is.na(column)] <- 0
+    column[column == 7] <- 9
+  }
+  return(column)
+}
+
+categorical_data_processed_1 <- data.frame(lapply(categorical_data, replace_values))
+
+# Check missing values in individual columns
+missing_values_per_column <- sapply(categorical_data_processed_1, function(x) sum(is.na(x)))
+# Get column names with missing values
+names(missing_values_per_column[missing_values_per_column > 0])
+```
+```{r}
+#Handling Categorical Variables include 77 and 99
+#Fill NA with 99, and replace 77 with 99.
+
+categorical_data_processed_1$INCOME2[categorical_data_processed_1$INCOME2 %in% c(77)] <- 99
+categorical_data_processed_1$INCOME2[is.na(categorical_data_processed_1$INCOME2)] <- 99
+
+categorical_data_processed_1$X_PRACE1[categorical_data_processed_1$X_PRACE1 %in% c(77)] <- 99
+categorical_data_processed_1$X_PRACE1[is.na(categorical_data_processed_1$X_PRACE1)] <- 99
+
+categorical_data_processed_1$X_MRACE1[categorical_data_processed_1$X_MRACE1 %in% c(77)] <- 99
+categorical_data_processed_1$X_MRACE1[is.na(categorical_data_processed_1$X_MRACE1)] <- 99
+```
+
+
+```{r}
+# Handling the continuous variables: outliers
+# Define the function to replace outliers with the mean
+replace_outliers_with_mean <- function(column, ignore_values = NULL) {
+  if (!is.null(ignore_values)) {
+    column <- column[!column %in% ignore_values]
+  }
+  z_scores <- (column - mean(column)) / sd(column)
+  outliers <- abs(z_scores) > 3  
+  column[outliers] <- mean(column, na.rm = TRUE)
+  return(column)
+}
+
+# Specify values to be neglected for each column
+ignore_values <- list(
+  PHYSHLTH = c(88, 77, 99),
+  SLEPTIM1 = c(77, 99),
+  CPDEMO1B = c(7, 8, 9),
+  CHILDREN = c(88, 99),
+  HTM4 = NULL,  # No values to neglect for this column
+  WTKG3 = NULL,  # No values to neglect for this column
+  X_BMI5 = NULL,  # No values to neglect for this column
+  DROCDY3_ = c(900),  
+  X_DRNKWK1 =c(99900), 
+  X_STRWT = NULL,  # No values to neglect for this column
+  X_RAWRAKE = NULL,  # No values to neglect for this column
+  X_WT2RAKE = NULL,  # No values to neglect for this column
+  X_LLCPWT2 = NULL,  # No values to neglect for this column
+  X_LLCPWT = NULL, # No values to neglect for this column
+  X_AGE80 = NULL # No values to neglect for this column
+)
+
+for (column in names(ignore_values)) {
+  # Replace outliers only for the non-ignored values
+  continuous_data[[column]][!continuous_data[[column]] %in% ignore_values[[column]]] <- replace_outliers_with_mean(continuous_data[[column]][!continuous_data[[column]] %in% ignore_values[[column]]])
+}
+```
+
+```{r}
+# Handling the continuous variables: filling out NA
+
+continuous_data$PHYSHLTH[continuous_data$PHYSHLTH %in% c(88)] <- 0
+continuous_data$CPDEMO1B[continuous_data$CPDEMO1B %in% c(8)] <- 0
+continuous_data$CHILDREN[continuous_data$CHILDREN %in% c(88)] <- 0
+
+# Replace ignore_values to NA, then fill them with mean 
+replace_with_NA <- function(df, ignore_values) {
+  for (col_name in names(ignore_values)) {
+    if (!is.null(ignore_values[[col_name]])) {
+      # Get the values to replace with NA for the current column
+      values_to_replace <- ignore_values[[col_name]]
+      # Replace specified values with NA in the column
+      df[[col_name]][df[[col_name]] %in% values_to_replace] <- NA
+    }
+  }
+  return(df)
+}
+
+continuous_data_processed_1 <- replace_with_NA(continuous_data, ignore_values)
+
+#Fill NA with mean
+for(i in 1:ncol(continuous_data_processed_1)){
+  continuous_data_processed_1[is.na(continuous_data_processed_1[,i]), i] <- mean(continuous_data_processed_1[,i], na.rm = TRUE)
+}
+```
+
+```{r}
+#Merge continuous data and categorical data
+data <- cbind(categorical_data_processed_1, continuous_data_processed_1)
+```
+
+
+```{r}
+# Check missing values in individual columns
+missing_values_per_column <- sapply(data, function(x) sum(is.na(x)))
+# Get column names with missing values
+names(missing_values_per_column[missing_values_per_column > 0])
+
+```
+```{r}
+column_continuous <- c("PHYSHLTH", "SLEPTIM1", "CPDEMO1B", "CHILDREN", "X_STRWT", "X_RAWRAKE", "X_WT2RAKE", "X_LLCPWT2", "X_LLCPWT","X_AGE80","HTM4", "WTKG3", "X_BMI5", "DROCDY3_", "X_DRNKWK1")
+
+#Factor the categorical columns
+data[] <- lapply(names(data), function(col) {
+  if (!col %in% column_continuous) {
+    data[[col]] <- as.factor(data[[col]])
+  } else {
+    data[[col]]
+  }
+})
+```
+
+```{r}
+# Zero Variance
+nearZeroVar(data, names=TRUE)
+```
+```{r}
+#Remove the columns found above
+data_selected_1 <- data[, !names(data) %in% c("CVDSTRK3","CHCKDNY2","DIFFDRES","USENOW3","QSTLANG")]
+```
+
+```{r}
+#Find colinearity of continuous variables
+corr <- cor(data_selected_1[column_continuous])
+highCorr <- findCorrelation(corr, cutoff = 0.7, names = TRUE)
+highCorr
+```
+```{r}
+data_preprocessed <- data_selected_1[, !names(data_selected_1) %in% c("X_STRWT","X_WT2RAKE","WTKG3","DROCDY3_")]
+```
+
+
+```{r}
+# Write the cleaned data to a CSV file
+write.csv(data_preprocessed, "preprocessed_data.csv", row.names = FALSE)
+```
+```{r}
+# Split the data to test and train
+set.seed(123)  
+split <- createDataPartition(data_preprocessed$Class, p = 0.8, list = FALSE)
+train_data <- data_preprocessed[split, ]
+test_data <- data_preprocessed[-split, ]
+```
+```{r}
+# Write the cleaned data to a CSV file
+write.csv(train_data, "initial_train.csv", row.names = FALSE)
+write.csv(test_data, "initial_test.csv", row.names = FALSE)
+
+```
+
+###################### End of Pre-Processing ###################################
+#Creating 6 Training DataSets
+```{r}
+train_data <- read.csv("initial_train.csv")
+test_data <- read.csv("initial_test.csv")
+```
+```{r}
+column_continuous <- c("PHYSHLTH", "SLEPTIM1", "CPDEMO1B", "CHILDREN", "X_STRWT", "X_RAWRAKE", "X_WT2RAKE", "X_LLCPWT2", "X_LLCPWT","X_AGE80","HTM4", "WTKG3", "X_BMI5", "DROCDY3_", "X_DRNKWK1")
+
+#Factor the categorical columns
+train_data[] <- lapply(names(train_data), function(col) {
+  if (!col %in% column_continuous) {
+    train_data[[col]] <- as.factor(train_data[[col]])
+  } else {
+    train_data[[col]]
+  }
+})
+```
+
+```{r}
+#Balancing Data Method 1: Use Smote
+#3, 1.417   3239
+set.seed(123)
+train_data_SMOTE <- smote(Class~., data = train_data, perc.over = 4, perc.under = 1.1, k = 5)
+```
+```{r}
+#Attribute Selection 1: CFS
+set.seed(123)
+cfs_attributes <- cfs(Class~., data=train_data_SMOTE)
+cfs_attributes
+```
+
+```{r}
+# Dataset1: Smote and CFS
+train_data_1 <- train_data_SMOTE[, (names(train_data_SMOTE) %in% c(cfs_attributes,"Class"))]
+```
+
+```{r}
+# Attribute Selection 2: Info Gain
+set.seed(123)
+info.gain <- information.gain(Class~., train_data_SMOTE)
+info.gain <- cbind(rownames(info.gain), data.frame(info.gain, row.names = NULL))
+names(info.gain)<- c("Attribute","Info Gain")
+sorted.info.gain <- info.gain[order(-info.gain$"Info Gain"),]
+high_info_gain_attributes <- sorted.info.gain[sorted.info.gain$`Info Gain` > 0.02, "Attribute"]
+high_info_gain_attributes
+```
+```{r}
+# Dataset 2: Smote and Info Gain
+train_data_2 <- train_data_SMOTE[, (names(train_data_SMOTE) %in% c(high_info_gain_attributes,"Class"))]
+```
+
+```{r}
+# Attribute Selection 3: Random Forest Importance
+set.seed(123)
+att.scores <- random.forest.importance(Class ~ ., train_data_SMOTE)
+```
+```{r}
+att_attributes <- cutoff.k.percent(att.scores, 0.2)
+att_attributes
+```
+```{r}
+# Dataset 3: Smote and Random Forest Importance
+train_data_3 <- train_data_SMOTE[, (names(train_data_SMOTE) %in% c(att_attributes,"Class"))]
+```
+
+
+```{r}
+#Balancing Data Method 2: Random oversmaple and undersample
+set.seed(123)
+train_data_random <- ROSE(Class ~ ., data = train_data, N = 5000, p = 0.5)$data
+```
+```{r}
+#Attribute Selection 1: CFS
+set.seed(123)
+cfs_attributes_2 <- cfs(Class~., data=train_data_random)
+cfs_attributes_2
+```
+```{r}
+# Dataset 4: Random and CFS
+train_data_4 <- train_data_random[, (names(train_data_random) %in% c(cfs_attributes_2,"Class"))]
+```
+```{r}
+#Attribute Selection 2: Info Gain
+set.seed(123)
+info.gain <- information.gain(Class~., train_data_random)
+info.gain <- cbind(rownames(info.gain), data.frame(info.gain, row.names = NULL))
+names(info.gain)<- c("Attribute","Info Gain")
+sorted.info.gain <- info.gain[order(-info.gain$"Info Gain"),]
+high_info_gain_attributes_2 <- sorted.info.gain[sorted.info.gain$`Info Gain` > 0.012, "Attribute"]
+high_info_gain_attributes_2
+```
+
+```{r}
+# Dataset 5: Random and Info Gain
+train_data_5 <- train_data_random[, (names(train_data_random) %in% c(high_info_gain_attributes_2,"Class"))]
+```
+```{r}
+# Attribute Selection 3: Random Forest Importance
+set.seed(123)
+att.scores_2 <- random.forest.importance(Class ~ ., train_data_random)
+att_attributes_2 <- cutoff.k.percent(att.scores_2, 0.25)
+att_attributes_2
+```
+```{r}
+# Dataset 6: Random and Random Forest Importance
+train_data_6 <- train_data_random[, (names(train_data_random) %in% c(att_attributes_2,"Class"))]
+```
+```{r}
+write.csv(train_data_1, "train_data_1.csv", row.names = FALSE)
+write.csv(train_data_2, "train_data_2.csv", row.names = FALSE)
+write.csv(train_data_3, "train_data_3.csv", row.names = FALSE)
+```
+```{r}
+write.csv(train_data_4, "train_data_4.csv", row.names = FALSE)
+write.csv(train_data_5, "train_data_5.csv", row.names = FALSE)
+write.csv(train_data_6, "train_data_6.csv", row.names = FALSE)
+```
+#Model Fitting
+```{r}
+train_data_1 <- read.csv("train_data_1.csv")
+train_data_2 <- read.csv("train_data_2.csv")
+train_data_3 <- read.csv("train_data_3.csv")
+train_data_4 <- read.csv("train_data_4.csv")
+train_data_5 <- read.csv("train_data_5.csv")
+train_data_6 <- read.csv("train_data_6.csv")
+test_data <- read.csv("initial_test.csv")
+```
+```{r}
+column_continuous <- c("PHYSHLTH", "SLEPTIM1", "CPDEMO1B", "CHILDREN", "X_STRWT", "X_RAWRAKE", "X_WT2RAKE", "X_LLCPWT2", "X_LLCPWT","X_AGE80","HTM4", "WTKG3", "X_BMI5", "DROCDY3_", "X_DRNKWK1")
+
+#Functions to factor categorical variables
+factor_categorical <- function(data) {
+  data[] <- lapply(names(data), function(col) {
+    if (!col %in% column_continuous) {
+      return(as.factor(data[[col]]))
+    } else {
+      return(data[[col]])
+    }
+  })
+  return(data)
+}
+```
+```{r}
+train_data_1_factored <-factor_categorical(train_data_1)
+train_data_2_factored <-factor_categorical(train_data_2)
+train_data_3_factored <-factor_categorical(train_data_3)
+train_data_4_factored <-factor_categorical(train_data_4)
+train_data_5_factored <-factor_categorical(train_data_5)
+train_data_6_factored <-factor_categorical(train_data_6)
+test_data_factored <- factor_categorical(test_data)
+```
+```{r}
+test_data_1_factored <- test_data_factored[, colnames(train_data_1_factored)]
+test_data_2_factored <- test_data_factored[, colnames(train_data_2_factored)]
+test_data_3_factored <- test_data_factored[, colnames(train_data_3_factored)]
+test_data_4_factored <- test_data_factored[, colnames(train_data_4_factored)]
+test_data_5_factored <- test_data_factored[, colnames(train_data_5_factored)]
+test_data_6_factored <- test_data_factored[, colnames(train_data_6_factored)]
+```
+##Naive Bayes
+```{r}
+run_naive_bayes<-function(train_data, test_data) {
+  set.seed(123)
+  model <- naiveBayes(Class~.,data=train_data)
+  class_predictions <- predict(model, newdata = test_data, type = "class")
+  prob_predictions <- predict(model, newdata = test_data, type = "raw")
+
+  cf <- confusionMatrix(class_predictions, test_data$Class)
+  
+  # Calculate metrics for 'N' as positive
+  sensitivity_N <- cf$byClass['Sensitivity']  # TP Rate for N
+  specificity_N <- cf$byClass['Specificity']  # TN Rate for N, FP Rate for Y
+  precision_N <- cf$byClass['Precision']  # Precision for N
+  f1_score_N <- cf$byClass['F1']  # F1 Score for N
+
+  # Calculate metrics for 'Y' (treating 'Y' as positive temporarily)
+  cf_Y <- confusionMatrix(class_predictions, test_data$Class, positive = "Y")
+  sensitivity_Y <- cf_Y$byClass['Sensitivity']  # TP Rate for Y
+  specificity_Y <- cf_Y$byClass['Specificity']
+  precision_Y <- cf_Y$byClass['Precision']  # Precision for Y
+  f1_score_Y <- cf_Y$byClass['F1']  # F1 Score for Y
+  
+  # ROC and AUC
+  roc_obj_N <- roc(response = test_data$Class, predictor = prob_predictions[, "N"], levels = rev(levels(test_data$Class)))
+  auc_value_N <- auc(roc_obj_N)
+  
+  # MCC
+  TP <- as.numeric(cf$table[1,1]); TN <- as.numeric(cf$table[2,2]); FP <- as.numeric(cf$table[1,2]); FN <-as.numeric(cf$table[2,1])
+  mcc_value_N <- (TP*TN-FP*FN)/ sqrt((TP+FP) * (TP+FN) * (TN+FP) * (TN+FN))
+  
+  #Find proportion for each clss
+  class_counts <- table(test_data$Class)
+  class_proportions <- class_counts / sum(class_counts)
+  proportion_N <- class_proportions['N']
+  proportion_Y <- class_proportions['Y']
+
+  # Assemble the results 
+  results <- data.frame(
+    'TP Rate' = c(sensitivity_N, sensitivity_Y, 
+                  proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'FP Rate' = c(1 - specificity_N, 1 - specificity_Y,
+                  proportion_N*(1 - specificity_N)+proportion_Y*(1 - specificity_Y)),
+    'Precision' = c(precision_N, precision_Y,
+                    proportion_N*precision_N+proportion_Y*precision_Y),
+    'Recall' = c(sensitivity_N, sensitivity_Y,
+                 proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'F-measure' = c(f1_score_N, f1_score_Y,
+                    proportion_N*f1_score_N+proportion_Y*f1_score_Y),
+    'ROC Area' = c(auc_value_N, auc_value_N,auc_value_N),
+    'MCC' = c(mcc_value_N, mcc_value_N,mcc_value_N),  
+    'Kappa' = c(cf$overall['Kappa'], cf$overall['Kappa'],cf$overall['Kappa'])
+  )
+
+  rownames(results) <- c("Class N", "Class Y", "Weighted Average")
+  
+  print(results)
+  return (cf)
+}
+```
+```{r}
+run_naive_bayes(train_data_1_factored,test_data_1_factored)
+```
+```{r}
+run_naive_bayes(train_data_2_factored,test_data_2_factored)
+```
+```{r}
+run_naive_bayes(train_data_3_factored,test_data_3_factored)
+```
+```{r}
+run_naive_bayes(train_data_4_factored,test_data_4_factored)
+```
+```{r}
+run_naive_bayes(train_data_5_factored,test_data_5_factored)
+```
+```{r}
+run_naive_bayes(train_data_6_factored,test_data_6_factored)
+```
+##rPart
+```{r}
+run_rpart <- function(train_data, test_data) {
+  set.seed(123)
+  ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 5,summaryFunction = defaultSummary)
+  model_rpart <- train(Class ~ ., data = train_data, method = "rpart", trControl = ctrl, tuneLength = 10)
+  predictions <- predict(model_rpart, newdata = test_data)
+  prob_predictions <- predict(model_rpart, newdata = test_data, type = "prob")
+  cf <- confusionMatrix(predictions, test_data$Class)
+  
+   # Calculate metrics for 'N' as positive
+  sensitivity_N <- cf$byClass['Sensitivity']  # TP Rate for N
+  specificity_N <- cf$byClass['Specificity']  # TN Rate for N, FP Rate for Y
+  precision_N <- cf$byClass['Precision']  # Precision for N
+  f1_score_N <- cf$byClass['F1']  # F1 Score for N
+
+  # Calculate metrics for 'Y' (treating 'Y' as positive temporarily)
+  cf_Y <- confusionMatrix(predictions, test_data$Class, positive = "Y")
+  sensitivity_Y <- cf_Y$byClass['Sensitivity']  # TP Rate for Y
+   specificity_Y <- cf_Y$byClass['Specificity'] 
+  precision_Y <- cf_Y$byClass['Precision']  # Precision for Y
+  f1_score_Y <- cf_Y$byClass['F1']  # F1 Score for Y
+  
+  # ROC and AUC
+  roc_obj_N <- roc(response = test_data$Class, predictor = prob_predictions[, "N"], levels = rev(levels(test_data$Class)))
+  auc_value_N <- auc(roc_obj_N)
+  
+  # MCC
+  TP <- as.numeric(cf$table[1,1]); TN <- as.numeric(cf$table[2,2]); FP <- as.numeric(cf$table[1,2]); FN <-as.numeric(cf$table[2,1])
+  mcc_value_N <- (TP*TN-FP*FN)/ sqrt((TP+FP) * (TP+FN) * (TN+FP) * (TN+FN))
+  
+  class_counts <- table(test_data$Class)
+  class_proportions <- class_counts / sum(class_counts)
+  proportion_N <- class_proportions['N']
+  proportion_Y <- class_proportions['Y']
+
+  # Assemble the results into a dataframe
+  results <- data.frame(
+    'TP Rate' = c(sensitivity_N, sensitivity_Y, 
+                  proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'FP Rate' = c(1 - specificity_N, 1 - specificity_Y,
+                  proportion_N*(1-specificity_N)+proportion_Y*(1-specificity_Y)),
+    'Precision' = c(precision_N, precision_Y,
+                    proportion_N*precision_N+proportion_Y*precision_Y),
+    'Recall' = c(sensitivity_N, sensitivity_Y,
+                 proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'F-measure' = c(f1_score_N, f1_score_Y,
+                    proportion_N*f1_score_N+proportion_Y*f1_score_Y),
+    'ROC Area' = c(auc_value_N, auc_value_N,auc_value_N),
+    'MCC' = c(mcc_value_N, mcc_value_N,mcc_value_N),  
+    'Kappa' = c(cf$overall['Kappa'], cf$overall['Kappa'],cf$overall['Kappa'])
+  )
+
+  rownames(results) <- c("Class N", "Class Y", "Weighted Average")
+  
+  print(results)
+  return (cf)
+}
+```
+```{r}
+run_rpart(train_data_1_factored,test_data_1_factored)
+```
+```{r}
+run_rpart(train_data_2_factored,test_data_2_factored)
+```
+```{r}
+run_rpart(train_data_3_factored,test_data_3_factored)
+```
+```{r}
+run_rpart(train_data_4_factored,test_data_4_factored)
+```
+```{r}
+run_rpart(train_data_5_factored,test_data_5_factored)
+```
+```{r}
+run_rpart(train_data_6_factored,test_data_6_factored)
+```
+##Logistic Regression
+```{r}
+#Logistic Regression Model
+run_log_reg<-function(train_data, test_data) {
+  set.seed(123)
+  model <- glm(Class ~., data = train_data, family = binomial)
+  prob_predictions <- predict(model, newdata = test_data, type = "response")
+  class_predictions <- factor(ifelse(prob_predictions > 0.5, "Y", "N"),
+                              levels = levels(test_data$Class))
+  cf <- confusionMatrix(class_predictions, test_data$Class)
+  
+  # Calculate metrics for 'N' as positive
+  sensitivity_N <- cf$byClass['Sensitivity']  # TP Rate for N
+  specificity_N <- cf$byClass['Specificity']  # TN Rate for N, FP Rate for Y
+  precision_N <- cf$byClass['Precision']  # Precision for N
+  f1_score_N <- cf$byClass['F1']  # F1 Score for N
+
+  # Calculate metrics for 'Y' (treating 'Y' as positive temporarily)
+  cf_Y <- confusionMatrix(class_predictions, test_data$Class, positive = "Y")
+  sensitivity_Y <- cf_Y$byClass['Sensitivity']  # TP Rate for Y
+  specificity_Y <- cf_Y$byClass['Specificity'] 
+  precision_Y <- cf_Y$byClass['Precision']  # Precision for Y
+  f1_score_Y <- cf_Y$byClass['F1']  # F1 Score for Y
+  
+  # ROC and AUC
+  roc_obj_N <- roc(response = test_data$Class, predictor = prob_predictions, levels = rev(levels(test_data$Class)))
+  auc_value_N <- auc(roc_obj_N)
+  
+  # MCC
+  TP <- as.numeric(cf$table[1,1]); TN <- as.numeric(cf$table[2,2]); FP <- as.numeric(cf$table[1,2]); FN <-as.numeric(cf$table[2,1])
+  mcc_value_N <- (TP*TN-FP*FN)/ sqrt((TP+FP) * (TP+FN) * (TN+FP) * (TN+FN))
+  
+  #Find proportion for each clss
+  class_counts <- table(test_data$Class)
+  class_proportions <- class_counts / sum(class_counts)
+  proportion_N <- class_proportions['N']
+  proportion_Y <- class_proportions['Y']
+
+  # Assemble the results 
+  results <- data.frame(
+    'TP Rate' = c(sensitivity_N, sensitivity_Y, 
+                  proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'FP Rate' = c(1 - specificity_N, 1 - specificity_Y,
+                  proportion_N*(1-specificity_N)+proportion_Y*(1-specificity_Y)),
+    'Precision' = c(precision_N, precision_Y,
+                    proportion_N*precision_N+proportion_Y*precision_Y),
+    'Recall' = c(sensitivity_N, sensitivity_Y,
+                 proportion_N*sensitivity_N+proportion_Y*sensitivity_Y),
+    'F-measure' = c(f1_score_N, f1_score_Y,
+                    proportion_N*f1_score_N+proportion_Y*f1_score_Y),
+    'ROC Area' = c(auc_value_N, auc_value_N,auc_value_N),
+    'MCC' = c(mcc_value_N, mcc_value_N,mcc_value_N),  
+    'Kappa' = c(cf$overall['Kappa'], cf$overall['Kappa'],cf$overall['Kappa'])
+  )
+
+  rownames(results) <- c("Class N", "Class Y", "Weighted Average")
+  
+  print(summary(model))
+  print(results)
+  return (cf)
+}
+```
+```{r}
+run_log_reg(train_data_1_factored,test_data_1_factored)
+```
+```{r}
+run_log_reg(train_data_2_factored,test_data_2_factored)
+```
+```{r}
+run_log_reg(train_data_3_factored,test_data_3_factored)
+```
+```{r}
+run_log_reg(train_data_4_factored,test_data_4_factored)
+```
+```{r}
+run_log_reg(train_data_5_factored,test_data_5_factored)
+```
+```{r}
+run_log_reg(train_data_6_factored,test_data_6_factored)
+```
+##LDA
+```{r}
+run_lda <- function(train_data, test_data) {
+  set.seed(123)
+  
+  # Convert 'Class' variable to factor in test_data if present in train_data
+  if ("Class" %in% colnames(train_data)) {
+    test_data$Class <- factor(test_data$Class)
+  }
+  
+  model <- lda(Class ~ ., data = train_data)
+  class_predictions <- predict(model, newdata = test_data)$class
+  
+  cf <- confusionMatrix(class_predictions, test_data$Class)
+  
+  # Print confusion matrix
+  print(cf)
+  
+  # Calculate metrics for 'N' as positive
+  sensitivity_N <- cf$byClass['Sensitivity']  # TP Rate for N
+  specificity_N <- cf$byClass['Specificity']  # TN Rate for N, FP Rate for Y
+  precision_N <- cf$byClass['Precision']  # Precision for N
+  f1_score_N <- cf$byClass['F1']  # F1 Score for N
+  
+  # Calculate metrics for 'Y' (treating 'Y' as positive temporarily)
+  cf_Y <- confusionMatrix(class_predictions, test_data$Class, positive = "Y")
+  sensitivity_Y <- cf_Y$byClass['Sensitivity']  # TP Rate for Y
+  specificity_Y <- cf_Y$byClass['Specificity']
+  precision_Y <- cf_Y$byClass['Precision']  # Precision for Y
+  f1_score_Y <- cf_Y$byClass['F1']  # F1 Score for Y
+  
+  # ROC and AUC
+  roc_obj <- roc(response = as.numeric(test_data$Class == "Y"), 
+                 predictor = as.numeric(predict(model, newdata = test_data)$posterior[, "Y"]))
+  auc_value <- auc(roc_obj)
+  
+  # MCC
+  TP <- as.numeric(cf$table[1,1])
+  TN <- as.numeric(cf$table[2,2])
+  FP <- as.numeric(cf$table[1,2])
+  FN <- as.numeric(cf$table[2,1])
+  mcc_value <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+  
+  # Find proportion for each class
+  class_counts <- table(test_data$Class)
+  class_proportions <- class_counts / sum(class_counts)
+  proportion_N <- class_proportions['N']
+  proportion_Y <- class_proportions['Y']
+  
+  # Assemble the results 
+  results <- data.frame(
+    'TP Rate' = c(sensitivity_N, sensitivity_Y, 
+                  proportion_N * sensitivity_N + proportion_Y * sensitivity_Y),
+    'FP Rate' = c(1 - specificity_N, 1 - specificity_Y,
+                  proportion_N * (1 - specificity_N) + proportion_Y * (1 - specificity_Y)),
+    'Precision' = c(precision_N, precision_Y,
+                    proportion_N * precision_N + proportion_Y * precision_Y),
+    'Recall' = c(sensitivity_N, sensitivity_Y,
+                 proportion_N * sensitivity_N + proportion_Y * sensitivity_Y),
+    'F-measure' = c(f1_score_N, f1_score_Y,
+                    proportion_N * f1_score_N + proportion_Y * f1_score_Y),
+    'ROC Area' = c(auc_value, auc_value, auc_value),
+    'MCC' = c(mcc_value, mcc_value, mcc_value),  
+    'Kappa' = c(cf$overall['Kappa'], cf$overall['Kappa'], cf$overall['Kappa'])
+  )
+  
+  rownames(results) <- c("Class N", "Class Y", "Weighted Average")
+  
+  print(results)
+  return(cf)
+}
+```
+```{r}
+run_lda(train_data_1_factored, test_data_1_factored)
+```
+```{r}
+run_lda(train_data_2_factored, test_data_2_factored)
+```
+```{r}
+run_lda(train_data_3_factored, test_data_3_factored)
+```
+```{r}
+run_lda(train_data_4_factored, test_data_4_factored)
+```
+```{r}
+run_lda(train_data_5_factored, test_data_5_factored)
+```
+```{r}
+run_lda(train_data_6_factored, test_data_6_factored)
+```
+##SVM
+```{r}
+run_svm <- function(train_data, test_data) {
+  set.seed(123)
+  
+  # Convert 'Class' variable to factor in test_data if present in train_data
+  if ("Class" %in% colnames(train_data)) {
+    test_data$Class <- factor(test_data$Class)
+  }
+  
+  # Preprocess data: Scale numeric variables
+  preproc <- preProcess(train_data, method = c("center", "scale"))
+  train_data_scaled <- predict(preproc, train_data)
+  test_data_scaled <- predict(preproc, test_data)
+  
+  # Fit SVM model
+  model <- svm(Class ~ ., data = train_data_scaled, kernel = "radial")
+  
+  # Make predictions
+  class_predictions <- predict(model, newdata = test_data_scaled)
+  
+  # Confusion Matrix
+  cf <- confusionMatrix(class_predictions, test_data_scaled$Class)
+  
+  # Print confusion matrix
+  print(cf)
+  
+  # Calculate metrics for 'N' as positive
+  sensitivity_N <- cf$byClass['Sensitivity']  # TP Rate for N
+  specificity_N <- cf$byClass['Specificity']  # TN Rate for N, FP Rate for Y
+  precision_N <- cf$byClass['Precision']  # Precision for N
+  f1_score_N <- cf$byClass['F1']  # F1 Score for N
+  
+  # Calculate metrics for 'Y' (treating 'Y' as positive temporarily)
+  cf_Y <- confusionMatrix(class_predictions, test_data_scaled$Class, positive = "Y")
+  sensitivity_Y <- cf_Y$byClass['Sensitivity']  # TP Rate for Y
+  specificity_Y <- cf_Y$byClass['Specificity'] 
+  precision_Y <- cf_Y$byClass['Precision']  # Precision for Y
+  f1_score_Y <- cf_Y$byClass['F1']  # F1 Score for Y
+  
+  # ROC and AUC
+  roc_obj <- roc(response = as.numeric(test_data_scaled$Class == "Y"), 
+                 predictor = as.numeric(predict(model, newdata = test_data_scaled)))
+  auc_value <- auc(roc_obj)
+  
+  # MCC
+  TP <- as.numeric(cf$table[1,1])
+  TN <- as.numeric(cf$table[2,2])
+  FP <- as.numeric(cf$table[1,2])
+  FN <- as.numeric(cf$table[2,1])
+  mcc_value <- (TP * TN - FP * FN) / sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+  
+  # Find proportion for each class
+  class_counts <- table(test_data_scaled$Class)
+  class_proportions <- class_counts / sum(class_counts)
+  proportion_N <- class_proportions['N']
+  proportion_Y <- class_proportions['Y']
+  
+  # Assemble the results 
+  results <- data.frame(
+    'TP Rate' = c(sensitivity_N, sensitivity_Y, 
+                  proportion_N * sensitivity_N + proportion_Y * sensitivity_Y),
+    'FP Rate' = c(1 - sensitivity_N, 1 - sensitivity_Y,
+                  proportion_N * (1 - sensitivity_N) + proportion_Y * (1 - sensitivity_Y)),
+    'Precision' = c(precision_N, precision_Y,
+                    proportion_N * precision_N + proportion_Y * precision_Y),
+    'Recall' = c(sensitivity_N, sensitivity_Y,
+                 proportion_N * sensitivity_N + proportion_Y * sensitivity_Y),
+    'F-measure' = c(f1_score_N, f1_score_Y,
+                    proportion_N * f1_score_N + proportion_Y * f1_score_Y),
+    'ROC Area' = c(auc_value, auc_value, auc_value),
+    'MCC' = c(mcc_value, mcc_value, mcc_value),
+    'Kappa' = c(cf$overall['Kappa'], cf$overall['Kappa'], cf$overall['Kappa'])
+  )
+  
+  rownames(results) <- c("Class N", "Class Y", "Weighted Average")
+  
+  print(results)
+  return(cf)
+}
+```
+```{r}
+run_svm(train_data_1_factored,test_data_1_factored)
+```
+```{r}
+run_svm(train_data_2_factored,test_data_2_factored)
+```
+```{r}
+run_svm(train_data_3_factored,test_data_3_factored)
+```
+```{r}
+run_svm(train_data_4_factored,test_data_4_factored)
+```
+```{r}
+run_svm(train_data_5_factored,test_data_5_factored)
+```
+```{r}
+run_svm(train_data_6_factored,test_data_6_factored)
+```
