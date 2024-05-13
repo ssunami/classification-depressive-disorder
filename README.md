@@ -2,8 +2,6 @@
 
 Depressive disorders are one of the major mental health problems suffered by millions of people worldwide. This disorder not only significantly reduces an individual's quality of life, but also causes significant socioeconomic burden. While early diagnosis and appropriate therapeutic intervention are considered key to recovery, this study aims to develop a machine learning-based classification model for depressive disorders to improve the accuracy and efficiency of diagnosis.
 
-## Project Overview
-
 ## Data
 The dataset we are using is sourced from a 2020 Behavioral Risk Factor Surveillance System (BRFSS) Survey Data, and modified before being provided. The dataset initially had 5000 tuples with 276 attributes in total.
 
